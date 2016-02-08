@@ -1,0 +1,112 @@
+---
+title: "1. Munging Time Series Data."
+author: "Matthew Ross"
+date: "February 8, 2016"
+output: html_document
+---
+
+##Project overview and package loading
+This document provides a reproducible example of how one might approach time series analysis, starting with munging or Quality Assessment/Control, or that often forgotten, but especially important step where you turn raw data into analyzable data. For this intro, we will be using some data from my current (2016) research project on mountaintop mining impacts on hydrology and biogeochemistry.
+
+For this project we have many sites, with many sensors, and many different data streams. For now we will just focus on 1 site, Laurel Branch, a watershed that has been dramatically impacted by mining. All of our analysis will depend heavily on packages, which are incredibly important for using R effectively. For more info you can read my 'useful packages' example [here:](https://github.com/matthewross07/ShinyTutorial_Practice/tree/master/Useful_Package_Examples). So let's load those packages
+
+
+
+```{r}
+library(lubridate) # a great package for dealing with timestamps. 
+library(xts) # another good package for time series analysis
+library(stringr) # A package to do some text manipulation. 
+library(dygraphs) # A package for excellent viz of ts data
+```
+
+
+To keep this code relatively short and simple, I'm hiding a lot of the guts in some custom functions that we can load with the "source" command
+
+```{r}
+source("qc_functions_mr.R")
+```
+
+### Initial data read in. 
+
+Ok, so now we have all the tools we need to get started munging our data. First we need to read it in. In this case we have 2 fodlers in the RawData folder. 1 That holds data on stream specific conductance (a proxy for salinity) and one that measures water level. For now we will focus on the conductivity data. 'LB_2_C'
+
+
+##1. Data Read In 
+```{r}
+#Shows folders in our RawData folder
+list.files('RawData')
+# We just want the LB_2_C folder
+list.files('RawData/LB_2_C')
+#Wow that's a lot of csv files!
+
+```
+
+
+```{r,eval=F}
+#Let's read one in to see what it looks like:
+lb.c <- read.csv('1.TS.Munging/RawData/LB_2_C/LB_2_C-1.20.2015.csv')
+```
+This line can't read column names (very common, so let's skip the first line)
+
+
+```{r}
+lb.c <- read.csv('RawData/LB_2_C/LB_2_C-1.20.2015.csv',skip=1)
+
+```
+
+
+Ok so those names are long and ugly. Let's give it a new set of names that are easier to call. 
+```{r}
+col.names.1 <- c('Sample','Date.Time','Cond_low','Cond_high','Temp',
+                    'Detached','Attached','Connected','Stopped','end')
+#Reset names
+names(lb.c) <- col.names.1
+
+```
+
+
+##2. Explore Data. 
+
+First we need to tell R how to read the data timestamp using lubridate. We are going to use the no daylight savings time version of east coast time as our time zone. The abbreviation for this is 'ETC/Gmt-5' 
+
+```{r}
+mytz <- 'Etc/GMT-5'
+lb.c$lubridate <- mdy_hms(lb.c$Date.Time, tz=mytz)
+```
+
+The command "mdy_hms" reads in time that has the order month day year hours minutes seconds. So my birthday with this time format would be 10/31/1987 12:03:21. If my birthday were listed as 1987/10/31 12:03:21, you would simply use the command "ymd_hms" instead. 
+
+Now R knows that we have data that is a time series. So let's plot it!
+
+```{r}
+plot(lb.c$Cond_high ~ lb.c$lubridate,xlab='Date.Time',ylab=expression(paste('Conductivity (', mu,'S/cm)',sep='')))
+
+#That's weird looks like there is daily variation...
+plot(lb.c$Cond_high ~ lb.c$Temp,xlab='Date.Time',ylab=expression(paste('Conductivity (', mu,'S/cm)',sep='')))
+```
+
+Uhh is conductivity supposed to have a temperature dependency?....
+
+No! Let's fix that. 
+
+```{r}
+lb.c$SC <- lb.c$Cond_high/(1+.02*(lb.c$Temp-25)) # A formula for correcting conductivity by temperature. 
+
+```
+
+Did that fix it? Looks like mostly it did. 
+```{r}
+plot(lb.c$SC ~ lb.c$lubridate,xlab='Date.Time',ylab=expression(paste('Conductivity (', mu,'S/cm)',sep='')))
+```
+
+
+##Better data visualization
+
+Ok so that data is still not very easy to look at. Let's try something else using dygraphs. First we need to make it an xts object, which means it is an object that R recognizes as a time series object
+```{r}
+lb.xts <- xts(cbind(Laurel.Branch.SC=lb.c$SC),order.by=lb.c$lubridate)
+
+dygraph(lb.xts)
+
+
+```
