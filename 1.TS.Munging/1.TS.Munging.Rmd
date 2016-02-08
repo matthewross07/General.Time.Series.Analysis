@@ -19,12 +19,18 @@ library(stringr) # A package to do some text manipulation.
 library(dygraphs) # A package for excellent viz of ts data
 ```
 
+This code chunk just makes it so that the code here works both within the HTML and inside RStudio
+```{r, eval=F}
+setwd('1.TS.Munging')
+```
 
 To keep this code relatively short and simple, I'm hiding a lot of the guts in some custom functions that we can load with the "source" command
 
 ```{r}
 source("qc_functions_mr.R")
 ```
+
+
 
 ### Initial data read in. 
 
@@ -44,15 +50,16 @@ list.files('RawData/LB_2_C')
 
 ```{r,eval=F}
 #Let's read one in to see what it looks like:
-lb.c <- read.csv('1.TS.Munging/RawData/LB_2_C/LB_2_C-1.20.2015.csv')
+lb.c <- read.csv('RawData/LB_2_C/LB_2_C-1.20.2015.csv')
 ```
 This line can't read column names (very common, so let's skip the first line)
 
 
 ```{r}
 lb.c <- read.csv('RawData/LB_2_C/LB_2_C-1.20.2015.csv',skip=1)
-
+names(lb.c)
 ```
+
 
 
 Ok so those names are long and ugly. Let's give it a new set of names that are easier to call. 
@@ -61,6 +68,7 @@ col.names.1 <- c('Sample','Date.Time','Cond_low','Cond_high','Temp',
                     'Detached','Attached','Connected','Stopped','end')
 #Reset names
 names(lb.c) <- col.names.1
+str(lb.c)
 
 ```
 
