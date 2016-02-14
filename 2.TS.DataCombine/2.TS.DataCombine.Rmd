@@ -1,0 +1,272 @@
+---
+title: "2.TS.DataCombine"
+author: "Matthew Ross"
+date: "February 14, 2016"
+output: html_document
+---
+
+#Main Question: How do storms alter the amount of suspended sediment in urban streams with different geologies? 
+
+One might expect the triassic basin to have higher turbidity than the slate belt at higher flows because of the high clay content in triassic soils, which have higher turbidity values. But is that true in an urban setting?
+
+To answer this question we will learn a few key techniques in R:
+
+*Reading in and appending data streams
+*Merging time series data by time stamp
+*The [tidy data](http://vita.had.co.nz/papers/tidy-data.pdf) framework for analyzing data
+*Subsetting time series data for specific storms
+
+First, as ever, we need to load our packages:
+```{r packages, warning=FALSE,comment='hide'}
+library(lubridate) # a great package for dealing with timestamps. 
+library(xts) # another good package for time series analysis
+library(stringr) # A package to do some text manipulation. 
+library(dygraphs) # A package for excellent viz of ts data
+library(ggvis) # Interactive data viz (without having to make a shiny app)
+```
+##Reading in and appending data streams
+
+ The dataset we will be working with includes 4 total data sources from the Urban Streams project run by Emily Bernhardt, Dean Urban, Joseph DeLesantro and Joanna Blaszczak. Here, we will be looking at 2 Watersheds *W13* of the triassic basin and *W207* of the slate belt. Each stream has water level data (a proxy for discharge) and turbidity (a proxy for suspended sediment). This gives of 4 time series. And the first thing we need to do to work with the data is to read it in and append the files together. Many time series ts will come in the form of many '.csv' or '.txt' files that need to be appended to each other in order to get the full time series. This can be done in many ways but I'll go over 2 here.
+ 
+One minor note, I'm avoiding resetting our working directory throughout this tutorial. In your own work it may be more useful to simply reset working directories (to hop between data storage places) using the command: "setwd"
+
+```{r DataRead}
+#First we need to get a list of the files we are working with. 
+list.files('RawData')
+
+#Here we can see that in our raw data folder we have 2 more folders called "LevelDat" and "TurbDat". Let's look at what is in those folders.
+list.files('RawData/LevelDat')
+
+#Ok, so the level files have just 1 ".csv' and 1 '.RData' for each watershed. So we can simply read those in. Trying to keep our variable names as informative as possible. Have to skip 11 rows of metadata
+
+tri.lvl <- read.csv('RawData/LevelDat/W13_lvl.csv',skip=11) #Tri for triassic basin
+
+
+#Whoa, those files must be big, because that takes a while to load. Let's see how long a csv takes to load, with the command 'system.time'
+system.time(
+  tri.lvl <- read.csv('RawData/LevelDat/W13_lvl.csv',skip=11)
+)
+
+system.time(
+    slt.lvl <- read.csv('RawData/LevelDat/W207_lvl.csv',skip=11)
+)
+
+#And now the entire dataset (both triassic basin and slate belt) with the '.RData' format
+system.time(
+  load('RawData/LevelDat/W13_W207.lvl.RData')
+)
+
+#On my computer, it's almost 15 times faster and it gets both ts! When you can, use .RData for larger files. 
+
+#That gives us 2 data frames. slt.lvl for the slate belt data and tri.lvl for the triassic basin. We can look at their structure with the str command
+str(slt.lvl)
+str(tri.lvl)
+
+#In this case the column we are interested in is 'True_WL' which is water leverl in meters. 
+
+#Now for the turbidity data. What kind of files do we have? 
+list.files('RawData/TurbDat')
+#Two folders with turb data. What's inside?
+list.files('RawData/TurbDat/W13')
+#Ok so let's store those names
+tri.list <- list.files('RawData/TurbDat/W13')
+slt.list <- list.files('RawData/TurbDat/W207')
+
+#Those names are not the the complete path name so we can fix that with a paste
+tri.list <- paste('RawData/TurbDat/W13',tri.list,sep='/')
+slt.list <- paste('RawData/TurbDat/W207',slt.list,sep='/')
+
+#Option one for reading in the data is slower but maybe more easy to understand the mechanics of how the data is appended.
+#This is done in a 'for loop' where whatever is inside the loop is repeated for as many times as I tell it to. In this case #I want it to do the same thing 3 times (length of tri.list). To get all three csv files. 
+
+# I need to first setup a place to store my data in a list, an incredibly flexible way R stores data. 
+tri.stor <- list()
+slt.stor <- list()
+for(i in 1:length(tri.list)){
+  a <- read.csv(tri.list[i])
+  a$iteration <- i # This would be useful if you needed to eventually know which timestamp corresponded to each data download
+  tri.stor[[i]] <- a
+}
+
+#And now we can combine that data with the magic of 'do.call' which repeats an operation on a list of objects.
+tri.turb <- do.call('rbind',tri.stor)
+#Check out the data with 'head'
+head(tri.turb)
+
+#Ok what about the faster, shorter way? Again using the magic of do.call and also lapply.
+slt.turb <- do.call('rbind',lapply(slt.list,read.csv))
+#and what does it look like?
+head(slt.turb)
+#Notice there isn't an 'iteration' column, because you can't do that with this approach. 
+
+```
+
+
+##Merging Data by time.
+
+Now we have 4 time series read into R, and we want to combine all of these time series so we can look at how water level during storms might influence suspended sediment concentration between these two different geologies. As ever, there are many ways to merge time series, some better than others. I'll show 2 ways here.
+
+First, let's look at the longer, more verbose, but more understandable way of doing this. Remember we have 4 ts.
+*slt.lvl
+*tri.lvl
+*slt.turb
+*tri.turb
+```{r untidyMerge}
+#First we want to make sure that R understands the times these data are coming from. Using my fav time package lubridate. 
+
+mytz <- 'Etc/GMT-5'
+slt.lvl$min5 <- mdy_hm(slt.lvl$DateTime,tz=mytz)
+tri.lvl$min5 <- mdy_hm(tri.lvl$DateTime,tz=mytz)
+
+#But doing that for all 4 sites is kind of slow and repetitive. Maybe a better way?
+#Store all in a list.
+dat.list <- list(slt.lvl,tri.lvl,slt.turb,tri.turb)
+#Now I can write the code just once and apply the same procedure to all 4 dataframes. (Only works if column names are the same e.g. DateTime=DateTime.)
+
+#To force all points to be rounded to the nearest whole 5 minute mark, we will use a custom function listed here,
+#Where x is the column of data to be rounded and precision is the nearest whole minute to round to. 
+round_minute<-function(x,precision){
+  m<-minute(x)+second(x)/60
+  m.r<- round(m/precision)*precision
+  minute(x)<-m.r
+  second(x)<-0
+  x
+}
+
+
+for(i in 1:length(dat.list)){
+  dat.list[[i]]$min5 <- round_minute(mdy_hm(dat.list[[i]]$DateTime,tz=mytz),5)
+}
+
+#Or an apply (faster) verision of the same thing.
+dat.list1 <- lapply(dat.list, function(x){cbind(x, min5.apply=round_minute(mdy_hm(x$DateTime,tz=mytz),5))})
+
+#Are they really the same. Looks like it!
+head(dat.list1[[1]][,c('min5','min5.apply')])
+
+#Ok so let's merge the datastreams based on time. We'll use a recursive merge from the reshape package to do so. 
+library(reshape)
+#Merge recurse, takes each data frame out of the dat.list and merges it based on a column with a shared name. In this case the column 'min5'
+merged.dat <- merge_recurse(dat.list,by='min5')
+
+#You can also do a merge of time series using xts packages native time series merge like here.
+tri.xts <- xts((dat.list[[2]]$True_WL),order.by=dat.list[[2]]$min5)
+slt.xts <- xts((dat.list[[1]]$True_WL),order.by=dat.list[[1]]$min5)
+
+mrg.xts <- merge(tri.xts,slt.xts,all=T)
+
+#Pretty grea that xts knows to merge by time. But best used when you have 2 data frames only. With 3 or more other approaches are better. 
+
+#What does this data frame look like?
+head(merged.dat)
+#Ooh, that's kind of ugly 37 columns, most with weird names? We can do better. We can make this tidy!
+
+```
+
+
+##Tidy Data Merging (recommended approach).
+
+Hadley Wickham--who wrote the dplyr, ggvis,ggplot2,reshape,reshape2,tidyr,lubridate packages-- advocates for a specific [framework](http://vita.had.co.nz/papers/tidy-data.pdf) for tidying data for easier data manipulation and analysis. The main points of tidy data are as follows: 
+1. Each variable forms a column - data value,site,etc...
+2. Each observation forms a row - timestamp
+3. Each type of observational unit forms a table - Either whole time series or separated by data type (turbidity, level)
+
+We can tidy our data using this approach and make data manipulation a bit easier. 
+
+```{r TidyData}
+# In order to tidy our data, the code will start out as more verbose, but end up being a lot easier. First let's subset each dataset to include only the data we are interested in. 
+tri.lvl <- tri.lvl[,c('DateTime','True_WL')]
+tri.lvl$site <- 'Triassic'
+slt.lvl <- slt.lvl[,c('DateTime','True_WL')]
+slt.lvl$site <- 'Slate'
+tri.turb <- tri.turb[,c('DateTime','Turb','Gain')]
+tri.turb$site <- 'Triassic'
+slt.turb <- slt.turb[,c('DateTime','Turb','Gain')]
+slt.turb$site <- 'Slate'
+
+head(tri.turb)
+head(slt.turb)
+
+#Now we have a bunch of data frames that have a very similar structure and we can already have two separate tidy dataframes by simply row binding each t.
+l <- rbind(tri.lvl,slt.lvl)
+t <- rbind(slt.turb,tri.turb)
+
+#As of now the turbidity dataset is reported in terms of voltage. Using a calibration curve from another dataset we can convert this into Normalized Turbidity Unites (NTU). The calibration depends on the column labeld (gain)
+t$TurbNTU <- NA
+
+t[which(t$Gain == 10),'TurbNTU'] <- t[which(t$Gain == 10),'Turb']*0.0731 - 2.4933
+t[which(t$Gain == 1),'TurbNTU'] <- t[which(t$Gain == 1),'Turb']*0.2755 - 150.504
+
+#This NTU column is really all we want for the tidy data frame. So let's get rid of it and the Gain column
+head(t)
+t <- t[,c('DateTime','TurbNTU','site')]
+
+#But can we combine all of these into one very tidy, very large t? Yes!
+#But first we need to make sure each dataset has a column that tells us the datatype. And has identical column names.
+names(l) <- c('DateTime','value','site')
+names(t) <- c('DateTime','value','site')
+
+l$data.type <- 'level.m'
+t$data.type <- 'turb.ntu'
+
+#Now the data frames have matched structures and can be rbound into a very 'long' dataset
+long.dat <- rbind(l,t)
+
+#This long data frame now allows us to add our 'min5' column easily
+long.dat$min5 <- round_minute(mdy_hm(long.dat$DateTime,tz=mytz),5)
+
+#Before we get the final dataset, the turbidity data is best from after Jan 9 at 9:30 AM, so let's subset our data.
+good.turb <- mdy_hm('1/9/2016 9:30',tz=mytz)
+long.dat <- long.dat[which(long.dat$min5 > good.turb),]
+
+#And using the cast function from the reshape 2 package we can reshape this long dataframe into a wide data frame that will have each column showing our data of interest. 
+library(reshape2)
+wide.dat <- dcast(long.dat,site+min5~data.type,value.var='value')
+wider.dat <- dcast(long.dat,min5~data.type+site,value.var='value')
+head(wide.dat)
+head(wider.dat)
+```
+
+
+##Data Visualization
+
+We have a final dataset called wide.dat. And we want to look at trends between turbidity in NTU and water level between the different sights. We can do this easily with dygraphs and ggplot2. I'm not going into much of an explanation of how ggplot works, but the internet is pretty good at [explaining](http://docs.ggplot2.org/current/) Let's try it out here:
+
+```{r DataVis,warning=FALSE,fig.height=3.2,fig.width=8}
+#First let's just look at the level and turb data for each site. 
+lvl.xts <- xts(cbind(slate=wider.dat$level.m_Slate,triassic=wider.dat$level.m_Triassic),order.by=wider.dat$min5)
+turb.xts <- xts(cbind(slate=wider.dat$turb.ntu_Slate,triassic=wider.dat$turb.ntu_Triassic),order.by=wider.dat$min5)
+
+dygraph(lvl.xts,group='alldat') %>% dyOptions(useDataTimezone=T)
+dygraph(turb.xts,group='alldat') %>% dyOptions(useDataTimezone=T)
+
+```
+
+
+Now what about correlation between water level and turbidity for the whole TimeSeries?
+```{r CorrTest}
+library(ggplot2)
+full.g <- ggplot(wide.dat, aes(level.m,turb.ntu,color=site))
+full.g + geom_point(alpha=.4)
+
+```
+
+Well that's a bit confusing to look at becasue Triassic level is always higher than slate level, the best way to actually compare the storm effect on turbidity between these two geologies would be to compare area corrected discharge, but we don't have that. Yet at least.  But it looks like maybe there are individual storm correlations that can be seen, especially for the slate belt. Let's pick and see what the correlation between storm level and level looks like for a distinct storm. We can pick this by using the dygrpahs above. I use one from Jan 15 to Jan 16. 
+
+```{r StormCorr}
+#Lubridate allows you to make intervals. We can do so with this storm. 
+storm1 <- interval(mdy_hm('1/15/2016 10:00 AM',tz=mytz),
+                    mdy_hm('1/16/2016 7:30 PM',tz=mytz))
+
+#And then we can intuitively subset the data by using the %within% command.
+
+sub.dat <- wide.dat[wide.dat$min5 %within% storm1,]
+
+full.g <- ggplot(sub.dat, aes(level.m,turb.ntu,color=site))
+full.g + geom_point(alpha=.4)
+```
+
+You could do a lot more with this approach including identifying a bunch of individual storms and seeing how they change over time. 
+
+
+#Fin
